@@ -1,4 +1,4 @@
-# Certification expiry date check
+# Certificate expiration date check
 
 To run, you need to describe the configuration file and execute app with him
 
