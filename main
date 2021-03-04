@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+
+# For example, cron record
+# 0	11	*	*	*   cd /opt/project/ && ./app ./config 2>&1 >> /var/log/app.log
+
+set -o nounset
+set -o errexit
+
+TARGETS=(
+    "google.com"
+    "github.com" 
+    "stackoverflow.com" 
+) 
+
+# Set how max many days to expiry date
+DAYS=465;
+
+WORK_DIR=$(pwd)
+date_now=$(date +'%Y/%m/%d %r')
+# CONFIG INIT
+if [[ $1 ]]
+then
+    CONFIG_INC="$1" # notifier config
+    CONFIG="${WORK_DIR}/${CONFIG_INC}" && source ${CONFIG}
+else
+    echo "You need config file to run this. Example: \"${0} ./example_config.sh\"" && exit 1
+fi
+
+# CHECKING INCOMING DOMAIN NAME FOR CERT EXPIRY DATE
+function checkCertExpireDate() {
+    echo "checking if $1 expires in less than $DAYS days";
+    expirationdate=$(date -d "$(: | openssl s_client -connect $1:443 -servername $1 2>/dev/null \
+                                  | openssl x509 -text \
+                                  | grep 'Not After' \
+                                  | awk '{print $4,$5,$7}')" '+%s'); 
+    in7days=$(($(date +%s) + (86400*$DAYS)));
+    if [ $in7days -gt $expirationdate ]; then
+        echo "KO - Certificate for $1 expires in less than $DAYS days, on $(date -d @$expirationdate '+%Y-%m-%d')" \
+        && ACCUM+="\
+	For domain:  $1\n\
+	Certificate expires on:  $(date -d @$expirationdate '+%Y-%m-%d')\n\n" # MESSAGE
+    else
+        echo "OK - Certificate expires on $expirationdate";
+    fi;
+}
+
+# SEND INCOMING ARG TO TELEGRAM
+function notifyTelegram () {
+    TIME="10"
+    URL="https://api.telegram.org/bot${TELEGRAM[apiToken]}/sendMessage"
+    CODE_ONLY="-o /dev/null -s -w %{http_code}\n" 
+
+    MSG=$(echo -e "Message from:  $(hostname -s)\n\
+	Trigger, remaining days <  $DAYS\n\n$1\
+	List of domains to check:\n\
+	https://github.com/idesyatov/cert-checker") 
+	
+    curl -s --max-time $TIME -d "chat_id=${TELEGRAM[chatId]}&disable_web_page_preview=1&text=${MSG}" $URL
+}
+
+# MAIN LOOP)
+function main() {
+    for i in "${TARGETS[@]}"
+    do
+        checkCertExpireDate $i
+    done
+    notifyTelegram "$ACCUM"
+} 
+
+main
+
