@@ -13,59 +13,83 @@ TARGETS=(
 ) 
 
 # Set how max many days to expiry date
-DAYS=465;
+DAYS=7;
 
 WORK_DIR=$(pwd)
-date_now=$(date +'%Y/%m/%d %r')
+DATE_NOW=$(date +'%Y/%m/%d %r')
+GIT_DOMAINS_LIST="https://github.com/idesyatov/cert-checkerblob/master/main"
+
 # CONFIG INIT
-if [[ $1 ]]
-then
+if [[ $1 ]]; then
     CONFIG_INC="$1" # notifier config
     CONFIG="${WORK_DIR}/${CONFIG_INC}" && source ${CONFIG}
 else
-    echo "You need config file to run this. Example: \"${0} ./example_config.sh\"" && exit 1
+    echo "You need config file to run this. Example: \"${0} ./example_config.sh\""
+    exit 1
 fi
 
 # CHECKING INCOMING DOMAIN NAME FOR CERT EXPIRY DATE
 function checkCertExpireDate() {
-    echo "checking if $1 expires in less than $DAYS days";
-    expirationdate=$(date -d "$(: | openssl s_client -connect $1:443 -servername $1 2>/dev/null \
-                                  | openssl x509 -text \
-                                  | grep 'Not After' \
-                                  | awk '{print $4,$5,$7}')" '+%s'); 
-    in7days=$(($(date +%s) + (86400*$DAYS)));
-    if [ $in7days -gt $expirationdate ]; then
-        echo "KO - Certificate for $1 expires in less than $DAYS days, on $(date -d @$expirationdate '+%Y-%m-%d')" \
-        && ACCUM+="\
-	For domain:  $1\n\
-	Certificate expires on:  $(date -d @$expirationdate '+%Y-%m-%d')\n\n" # MESSAGE
+    local STATUS_CODE=$(curl -o /dev/null -s -w %{http_code} $1)
+     
+    if [[ "$STATUS_CODE" != 000 ]]; then
+	echo "checking if $1 expires in less than $DAYS days";
+        expirationdate=$(date -d "$(: | openssl s_client -connect $1:443 -servername $1 2>/dev/null \
+                                      | openssl x509 -text \
+                                      | grep 'Not After' \
+                                      | awk '{print $4,$5,$7}')" '+%s'); 
+        local in7days=$(($(date +%s) + (86400*$DAYS)));
+        local expiryDateHumRead=$(date -d @$expirationdate '+%Y-%m-%d')
+
+	if [ $in7days -gt $expirationdate ]; then
+            echo "KO - Certificate for $1 expires in less than $DAYS days, on $expiryDateHumRead" \
+	    # ACCUMULATE MESSAGE
+            ACCUM+="\
+Для домена:  $1\n\
+Cрок действия сертификата истекает:  $expiryDateHumRead\n\n" # MESSAGE
+        else
+            echo "OK - Certificate expires on $expiryDateHumRead";
+        fi;
+    # DOMAIN DID NOT RESPOND
     else
-        echo "OK - Certificate expires on $expirationdate";
+        echo "I can not verify the certificate for the domain: $1 - status code:  $STATUS_CODE"
+	# ACCUMULATE MESSAGE
+	ACCUM+="\
+Для домена:  $1\n\
+Не могу проверить сертификат.\n\
+Вероятно проблема доcтупа, код ответа:  $STATUS_CODE.\n\n" # MESSAGE
     fi;
 }
 
 # SEND INCOMING ARG TO TELEGRAM
 function notifyTelegram () {
-    TIME="10"
-    URL="https://api.telegram.org/bot${TELEGRAM[apiToken]}/sendMessage"
-    CODE_ONLY="-o /dev/null -s -w %{http_code}\n" 
+    local TIME="10"
+    local URL="https://api.telegram.org/bot${TELEGRAM[apiToken]}/sendMessage"
+    local CODE_ONLY="-o /dev/null -s -w %{http_code}\n" 
 
-    MSG=$(echo -e "Message from:  $(hostname -s)\n\
-	Trigger, remaining days <  $DAYS\n\n$1\
-	List of domains to check:\n\
-	https://github.com/idesyatov/cert-checkerblob/master/main") 
+    local MSG=$(echo -e "Сообщение от:  $(hostname -s)\n\
+	Оповещение, если оставшихся дней меньше:  $DAYS\n\n$1\n\
+	Список доменов для проверки:  $GIT_DOMAINS_LIST") 
 	
-    curl -s --max-time $TIME -d "chat_id=${TELEGRAM[chatId]}&disable_web_page_preview=1&text=${MSG}" $URL
+    curl $CODE_ONLY -s --max-time $TIME \
+	-d "chat_id=${TELEGRAM[chatId]}&disable_web_page_preview=1&text=${MSG}" $URL
 }
 
 # MAIN LOOP)
 function main() {
+    echo -e "$DATE_NOW Run the script\n"
     for i in "${TARGETS[@]}"
     do
         checkCertExpireDate $i
     done
-    notifyTelegram "$ACCUM"
-} 
+    if [ -z ${ACCUM+x} ]; then 
+        echo "All certificates have been renewed. You can sleep well"
+    else
+	echo "Some certificates need to be renewed. Notification sent:"
+	notifyTelegram "$ACCUM"
+    fi;
+    echo -e "\n$DATE_NOW Completing the script"
+    exit 0
+}
 
 main
-
