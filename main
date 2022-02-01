@@ -20,9 +20,9 @@ DATE_NOW=$(date +'%Y/%m/%d %r')
 GIT_DOMAINS_LIST="https://github.com/idesyatov/cert-checkerblob/master/main"
 
 # CONFIG INIT
-if [[ $1 ]]; then
+if [ "${1+x}" = x ]; then
     CONFIG_INC="$1" # notifier config
-    CONFIG="${WORK_DIR}/${CONFIG_INC}" && source ${CONFIG}
+    CONFIG="${CONFIG_INC}" && source ${CONFIG}
 else
     echo "You need config file to run this. Example: \"${0} ./example_config.sh\""
     exit 1
